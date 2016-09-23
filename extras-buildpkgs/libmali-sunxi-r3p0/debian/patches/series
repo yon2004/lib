@@ -1,1 +1,2 @@
-fix-multiarch.patch
+fix-makefiles.patch
+fix-makefiles-submodule.patch

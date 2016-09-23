@@ -11,7 +11,11 @@
 #
 # Main program
 #
-#
+
+# destination
+DEST=$SRC/output
+# sources for compilation
+SOURCES=$SRC/sources
 
 TTY_X=$(($(stty size | awk '{print $2}')-6)) # determine terminal width
 TTY_Y=$(($(stty size | awk '{print $1}')-6)) # determine terminal height
@@ -46,7 +50,7 @@ date +"%d_%m_%Y-%H_%M_%S" > $DEST/debug/timestamp
 ver1=$(awk -F"=" '/^# VERSION/ {print $2}' <"$SRC/compile.sh")
 ver2=$(awk -F"=" '/^# VERSION/ {print $2}' <"$SRC/lib/compile.sh" 2>/dev/null) || ver2=0
 if [[ -z $ver1 || $ver1 -lt $ver2 ]]; then
-	display_alert "File $0 is outdated. Please overwrite is with an updated version from" "$SRC/lib" "wrn"
+	display_alert "File $0 is outdated. Please overwrite it with an updated version from" "$SRC/lib" "wrn"
 	echo -e "Press \e[0;33m<Ctrl-C>\x1B[0m to abort compilation, \e[0;33m<Enter>\x1B[0m to ignore and continue"
 	read
 fi
@@ -75,8 +79,6 @@ else
 	CCACHE=""
 fi
 
-if [[ $FORCE_CHECKOUT == yes ]]; then FORCE="-f"; else FORCE=""; fi
-
 # optimize build time with 100% CPU usage
 CPUS=$(grep -c 'processor' /proc/cpuinfo)
 if [[ $USEALLCORES != no ]]; then
@@ -85,7 +87,7 @@ else
 	CTHREADS="-j1"
 fi
 
-# Check and fix dependencies, directory structure and settings
+# Check and install dependencies, directory structure and settings
 prepare_host
 
 # if KERNEL_ONLY, BOARD, BRANCH or RELEASE are not set, display selection menu
@@ -135,12 +137,12 @@ if [[ $KERNEL_ONLY != yes && -z $RELEASE ]]; then
 	options+=("jessie" "Debian 8 Jessie (stable)")
 	options+=("trusty" "Ubuntu Trusty 14.04.x LTS")
 	options+=("xenial" "Ubuntu Xenial 16.04.x LTS")
-	RELEASE=$(dialog --stdout --title "Choose a release" --backtitle "$backtitle" --menu "Select one of supported releases" $TTY_Y $TTY_X $(($TTY_Y - 8)) "${options[@]}")
+	RELEASE=$(dialog --stdout --title "Choose a release" --backtitle "$backtitle" --menu "Select one of the supported releases" $TTY_Y $TTY_X $(($TTY_Y - 8)) "${options[@]}")
 	unset options
 	[[ -z $RELEASE ]] && exit_with_error "No release selected"
 fi
 
-if [[ $KERNEL_ONLY != yes && -z $BUILD_DESKTOP ]]; then
+if [[ $KERNEL_ONLY != yes && -z $BUILD_DESKTOP && "jessie xenial" == *$RELEASE* ]]; then
 	options=()
 	options+=("no" "Image with console interface")
 	options+=("yes" "Image with desktop environment")
@@ -151,25 +153,12 @@ fi
 
 source $SRC/lib/configuration.sh
 
-# The name of the job
-VERSION="Armbian $REVISION ${BOARD^} $DISTRIBUTION $RELEASE $BRANCH"
-
-echo `date +"%d.%m.%Y %H:%M:%S"` $VERSION >> $DEST/debug/output.log
-(cd $SRC/lib; echo "Build script version: $(git rev-parse @)") >> $DEST/debug/output.log
-
 display_alert "Starting Armbian build script" "@host" "info"
-
-# display what we do
-if [[ $KERNEL_ONLY == yes ]]; then
-	display_alert "Compiling kernel" "$BOARD" "info"
-else
-	display_alert "Building" "$VERSION" "info"
-fi
 
 # sync clock
 if [[ $SYNC_CLOCK != no ]]; then
 	display_alert "Syncing clock" "host" "info"
-	eval ntpdate -s ${NTP_SERVER:- time.ijs.si}
+	ntpdate -s ${NTP_SERVER:- time.ijs.si}
 fi
 start=`date +%s`
 
@@ -177,19 +166,20 @@ start=`date +%s`
 
 [[ $CLEAN_LEVEL == *sources* ]] && cleaning "sources"
 
-display_alert "Downloading sources" "" "info"
-fetch_from_repo "$BOOTSOURCE" "$BOOTDIR" "$BOOTBRANCH" "yes"
-BOOTSOURCEDIR=$BOOTDIR/${BOOTBRANCH##*:}
-fetch_from_repo "$KERNELSOURCE" "$KERNELDIR" "$KERNELBRANCH" "yes"
-LINUXSOURCEDIR=$KERNELDIR/${KERNELBRANCH##*:}
+# ignore updates help on building all images - for internal purposes
+if [[ $IGNORE_UPDATES != yes ]]; then
+	display_alert "Downloading sources" "" "info"
+	fetch_from_repo "$BOOTSOURCE" "$BOOTDIR" "$BOOTBRANCH" "yes"
+	BOOTSOURCEDIR=$BOOTDIR/${BOOTBRANCH##*:}
+	fetch_from_repo "$KERNELSOURCE" "$KERNELDIR" "$KERNELBRANCH" "yes"
+	LINUXSOURCEDIR=$KERNELDIR/${KERNELBRANCH##*:}
+	# TODO: move to armbian-tools or extras-buildpkgs
+	fetch_from_repo "https://github.com/hglm/a10disp/" "sunxi-display-changer" "branch:master"
+fi
 
-if [[ -n $MISC1 ]]; then fetch_from_github "$MISC1" "$MISC1_DIR"; fi
-if [[ -n $MISC5 ]]; then fetch_from_github "$MISC5" "$MISC5_DIR"; fi
-if [[ -n $MISC6 ]]; then fetch_from_github "$MISC6" "$MISC6_DIR"; fi
+compile_sunxi_tools
 
-# compile sunxi tools
 if [[ $LINUXFAMILY == sun*i ]]; then
-	compile_sunxi_tools
 	[[ $BRANCH != default && $LINUXFAMILY != sun8i ]] && LINUXFAMILY="sunxi"
 fi
 
@@ -213,8 +203,7 @@ if [[ ! -f $DEST/debs/${CHOSEN_UBOOT}_${REVISION}_${ARCH}.deb ]]; then
 		find_toolchain "UBOOT" "$UBOOT_NEEDS_GCC" "UBOOT_TOOLCHAIN"
 	fi
 	cd $SOURCES/$BOOTSOURCEDIR
-	grab_version "$SOURCES/$BOOTSOURCEDIR" "UBOOT_VER"
-	[[ $FORCE_CHECKOUT == yes ]] && advanced_patch "u-boot" "$BOOTDIR-$BRANCH" "$BOARD" "$BOOTDIR-$BRANCH $UBOOT_VER"
+	[[ $FORCE_CHECKOUT == yes ]] && advanced_patch "u-boot" "$BOOTDIR-$BRANCH" "$BOARD" "$BOOTDIR-$BRANCH"
 	compile_uboot
 fi
 
@@ -229,23 +218,27 @@ if [[ ! -f $DEST/debs/${CHOSEN_KERNEL}_${REVISION}_${ARCH}.deb ]]; then
 
 	# this is a patch that Ubuntu Trusty compiler works
 	if [[ $(patch --dry-run -t -p1 < $SRC/lib/patch/kernel/compiler.patch | grep Reversed) != "" ]]; then
-		[[ $FORCE_CHECKOUT == yes ]] && patch --batch --silent -t -p1 < $SRC/lib/patch/kernel/compiler.patch > /dev/null 2>&1
+		display_alert "Patching kernel for compiler support"
+		[[ $FORCE_CHECKOUT == yes ]] && patch --batch --silent -t -p1 < $SRC/lib/patch/kernel/compiler.patch >> $DEST/debug/output.log 2>&1
 	fi
 
-	grab_version "$SOURCES/$LINUXSOURCEDIR" "KERNEL_VER"
-	[[ $FORCE_CHECKOUT == yes ]] && advanced_patch "kernel" "$LINUXFAMILY-$BRANCH" "$BOARD" "$LINUXFAMILY-$BRANCH $KERNEL_VER"
+	[[ $FORCE_CHECKOUT == yes ]] && advanced_patch "kernel" "$LINUXFAMILY-$BRANCH" "$BOARD" "$LINUXFAMILY-$BRANCH"
 	compile_kernel
 fi
+
+# extract kernel version from .deb package
+VER=$(dpkg --info $DEST/debs/${CHOSEN_KERNEL}_${REVISION}_${ARCH}.deb | grep Descr | awk '{print $(NF)}')
+VER="${VER/-$LINUXFAMILY/}"
 
 [[ -n $RELEASE ]] && create_board_package
 
 # chroot-buildpackages
-[[ $EXTERNAL_NEW == yes && $(lsb_release -sc) == xenial ]] && chroot_build_packages
+[[ $EXTERNAL_NEW == compile ]] && chroot_build_packages
 
 if [[ $KERNEL_ONLY != yes ]]; then
 	debootstrap_ng
 else
-	display_alert "Kernel building done" "@host" "info"
+	display_alert "Kernel build done" "@host" "info"
 	display_alert "Target directory" "$DEST/debs/" "info"
 	display_alert "File name" "${CHOSEN_KERNEL}_${REVISION}_${ARCH}.deb" "info"
 fi

@@ -20,18 +20,20 @@ if [ "$-" != "${-#*i}" ]; then
 
 		# check for H3/legacy kernel to promote h3disp utility
 		HARDWARE=$(awk '/Hardware/ {print $3}' </proc/cpuinfo)
-		if [ "X${HARDWARE}" = "Xsun8i" ]; then
+		if [[ "X${HARDWARE}" = "Xsun8i" && $(bin2fex <"/boot/script.bin" 2>/dev/null | grep -w "hdmi_used = 1") ]]; then
 			setterm -default
 			echo -e "\nYour display settings are currently 720p (1280x720). To change this use the"
 			echo -e "h3disp utility. Do you want to change display settings now? [nY] \c"
 			read -n1 ConfigureDisplay
 			if [ "X${ConfigureDisplay}" != "Xn" -a "X${ConfigureDisplay}" != "XN" ]; then
 				echo -e "\n" ; /usr/local/bin/h3disp
+			else
+				echo -e "\n"
 			fi
 		fi
 
 		# check whether desktop environment has to be considered
-		if [ -f /etc/init.d/nodm ] ; then 
+		if [ -f /etc/init.d/nodm ] ; then
 			sed -i "s/NODM_USER=\(.*\)/NODM_USER=${RealUserName}/" /etc/default/nodm
 			sed -i "s/NODM_ENABLED=\(.*\)/NODM_ENABLED=true/g" /etc/default/nodm
 			if [[ -z $ConfigureDisplay || $ConfigureDisplay == n || $ConfigureDisplay == N ]]; then

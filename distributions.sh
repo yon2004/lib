@@ -16,8 +16,13 @@ install_common()
 {
 	display_alert "Applying common tweaks" "" "info"
 
+	# add dummy fstab entry to make mkinitramfs happy
+	echo "/dev/mmcblk0p1 / $ROOTFS_TYPE defaults 0 1" >> $CACHEDIR/sdcard/etc/fstab
+
 	# create modules file
-	if [[ $BRANCH == next || $BRANCH == dev ]]; then
+	if [[ $BRANCH == dev && -n $MODULES_DEV ]]; then
+		tr ' ' '\n' <<< "$MODULES_DEV" > $CACHEDIR/sdcard/etc/modules
+	elif [[ $BRANCH == next || $BRANCH == dev ]]; then
 		tr ' ' '\n' <<< "$MODULES_NEXT" > $CACHEDIR/sdcard/etc/modules
 	else
 		tr ' ' '\n' <<< "$MODULES" > $CACHEDIR/sdcard/etc/modules
@@ -27,10 +32,7 @@ install_common()
 	# before installing board support package
 	rm $CACHEDIR/sdcard/etc/network/interfaces
 
-	# copy hostapd configurations
-	# TODO: move to hostapd package
-	install $SRC/lib/config/hostapd/hostapd.conf $CACHEDIR/sdcard/etc/hostapd.conf
-	install $SRC/lib/config/hostapd/hostapd.realtek.conf $CACHEDIR/sdcard/etc/hostapd.conf-rt
+	mkdir -p $CACHEDIR/sdcard/selinux
 
 	# console fix due to Debian bug
 	sed -e 's/CHARMAP=".*"/CHARMAP="'$CONSOLE_CHAR'"/g' -i $CACHEDIR/sdcard/etc/default/console-setup
@@ -45,6 +47,7 @@ install_common()
 	chroot $CACHEDIR/sdcard /bin/bash -c "chage -d 0 root"
 
 	# tmpfs configuration
+	# Takes effect only in Wheezy and Trusty
 	if [[ -f $CACHEDIR/sdcard/etc/default/tmpfs ]]; then
 		sed -e 's/#RAMTMP=no/RAMTMP=yes/g' -i $CACHEDIR/sdcard/etc/default/tmpfs
 		sed -e 's/#RUN_SIZE=10%/RUN_SIZE=128M/g' -i $CACHEDIR/sdcard/etc/default/tmpfs
@@ -68,7 +71,6 @@ install_common()
 	# initial date for fake-hwclock
 	date -u '+%Y-%m-%d %H:%M:%S' > $CACHEDIR/sdcard/etc/fake-hwclock.data
 
-	# set hostname
 	echo $HOST > $CACHEDIR/sdcard/etc/hostname
 
 	# this is needed for ubuntu
@@ -76,16 +78,14 @@ install_common()
 	echo "nameserver 8.8.8.8" >> $CACHEDIR/sdcard/etc/resolv.conf
 
 	# set hostname in hosts file
-	echo "127.0.0.1   localhost $HOST" > $CACHEDIR/sdcard/etc/hosts
-	echo "::1         localhost $HOST ip6-localhost ip6-loopback" >> $CACHEDIR/sdcard/etc/hosts
-	echo "fe00::0     ip6-localnet" >> $CACHEDIR/sdcard/etc/hosts
-	echo "ff00::0     ip6-mcastprefix" >> $CACHEDIR/sdcard/etc/hosts
-	echo "ff02::1     ip6-allnodes" >> $CACHEDIR/sdcard/etc/hosts
-	echo "ff02::2     ip6-allrouters" >> $CACHEDIR/sdcard/etc/hosts
-
-	# extract kernel version
-	VER=$(dpkg --info $DEST/debs/${CHOSEN_KERNEL}_${REVISION}_${ARCH}.deb | grep Descr | awk '{print $(NF)}')
-	VER="${VER/-$LINUXFAMILY/}"
+	cat <<-EOF > $CACHEDIR/sdcard/etc/hosts
+	127.0.0.1   localhost $HOST
+	::1         localhost $HOST ip6-localhost ip6-loopback
+	fe00::0     ip6-localnet
+	ff00::0     ip6-mcastprefix
+	ff02::1     ip6-allnodes
+	ff02::2     ip6-allrouters
+	EOF
 
 	# we need package names for dtb, uboot and headers
 	DTB_TMP="${CHOSEN_KERNEL/image/dtb}"
@@ -93,33 +93,33 @@ install_common()
 	HEADERS_TMP="${CHOSEN_KERNEL/image/headers}"
 
 	display_alert "Installing kernel" "$CHOSEN_KERNEL" "info"
-	chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/${CHOSEN_KERNEL}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
+	chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/debs/${CHOSEN_KERNEL}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
 
 	display_alert "Installing u-boot" "$CHOSEN_UBOOT" "info"
-	chroot $CACHEDIR/sdcard /bin/bash -c "DEVICE=/dev/null dpkg -i /tmp/${CHOSEN_UBOOT}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
+	chroot $CACHEDIR/sdcard /bin/bash -c "DEVICE=/dev/null dpkg -i /tmp/debs/${CHOSEN_UBOOT}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
 
 	display_alert "Installing headers" "$HEADERS_TMP" "info"
-	chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/${HEADERS_TMP}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
-
+	chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/debs/${HEADERS_TMP}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
+	
 	# install firmware
-	#if [[ -f $CACHEDIR/sdcard/tmp/${FW_TMP}_${REVISION}_${ARCH}.deb ]]; then
+	#if [[ -f $CACHEDIR/sdcard/tmp/debs/${FW_TMP}_${REVISION}_${ARCH}.deb ]]; then
 	#	display_alert "Installing firmware" "$FW_TMP" "info"
-	#	chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/${FW_TMP}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
+	#	chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/debs/${FW_TMP}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
 	#fi
 
-	if [[ -f $CACHEDIR/sdcard/tmp/armbian-firmware_${REVISION}_${ARCH}.deb ]]; then
+	if [[ -f $CACHEDIR/sdcard/tmp/debs/armbian-firmware_${REVISION}_${ARCH}.deb ]]; then
 		display_alert "Installing generic firmware" "armbian-firmware" "info"
-		chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/armbian-firmware_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
+		chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/debs/armbian-firmware_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
 	fi
 
-	if [[ -f $CACHEDIR/sdcard/tmp/${DTB_TMP}_${REVISION}_${ARCH}.deb ]]; then
+	if [[ -f $CACHEDIR/sdcard/tmp/debs/${DTB_TMP}_${REVISION}_${ARCH}.deb ]]; then
 		display_alert "Installing DTB" "$DTB_TMP" "info"
-		chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/${DTB_TMP}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
+		chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/debs/${DTB_TMP}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
 	fi
 
 	# install board support package
 	display_alert "Installing board support package" "$BOARD" "info"
-	chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/$RELEASE/${CHOSEN_ROOTFS}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
+	chroot $CACHEDIR/sdcard /bin/bash -c "dpkg -i /tmp/debs/$RELEASE/${CHOSEN_ROOTFS}_${REVISION}_${ARCH}.deb" >> $DEST/debug/install.log 2>&1
 
 	# copy boot splash image
 	cp $SRC/lib/bin/armbian.bmp $CACHEDIR/sdcard/boot/boot.bmp
@@ -132,6 +132,9 @@ install_common()
 
 	# remove .old on new image
 	rm -rf $CACHEDIR/sdcard/boot/dtb.old
+
+	# enable verbose kernel messages on first boot
+	touch $CACHEDIR/sdcard/boot/.verbose
 }
 
 install_distribution_specific()
@@ -140,7 +143,7 @@ install_distribution_specific()
 
 	case $RELEASE in
 
-	wheezy) # Debian Wheezy
+	wheezy)
 		# add serial console
 		echo T0:2345:respawn:/sbin/getty -L $SERIALCON 115200 vt100 >> $CACHEDIR/sdcard/etc/inittab
 
@@ -162,17 +165,13 @@ install_distribution_specific()
 		sed -e 's/umountnfs $time/umountnfs $time ramlog/g' -i $CACHEDIR/sdcard/etc/init.d/rsyslog
 		;;
 
-	# Debian Jessie
 	jessie)
 		# enable root login for latest ssh on jessie
 		sed -i 's/PermitRootLogin without-password/PermitRootLogin yes/' $CACHEDIR/sdcard/etc/ssh/sshd_config
 
-		# fix selinux error
-		mkdir $CACHEDIR/sdcard/selinux
-
 		# add serial console
-		cp $SRC/lib/config/ttyS0.conf $CACHEDIR/sdcard/etc/init/$SERIALCON.conf
-		sed -e "s/ttyS0/$SERIALCON/g" -i $CACHEDIR/sdcard/etc/init/$SERIALCON.conf
+		#cp $SRC/lib/config/ttyS0.conf $CACHEDIR/sdcard/etc/init/$SERIALCON.conf
+		#sed -e "s/ttyS0/$SERIALCON/g" -i $CACHEDIR/sdcard/etc/init/$SERIALCON.conf
 		chroot $CACHEDIR/sdcard /bin/bash -c "systemctl --no-reload enable serial-getty@$SERIALCON.service >/dev/null 2>&1"
 		mkdir -p "$CACHEDIR/sdcard/etc/systemd/system/serial-getty@$SERIALCON.service.d"
 		printf "[Service]\nExecStart=\nExecStart=-/sbin/agetty -L 115200 %%I $TERM" > "$CACHEDIR/sdcard/etc/systemd/system/serial-getty@$SERIALCON.service.d/10-rate.conf"
@@ -190,11 +189,15 @@ install_distribution_specific()
 		cp $SRC/lib/config/71-axp-power-button.rules $CACHEDIR/sdcard/etc/udev/rules.d/
 		;;
 
-	# Ubuntu Trusty
 	trusty)
 		# add serial console
-		cp $SRC/lib/config/ttyS0.conf $CACHEDIR/sdcard/etc/init/$SERIALCON.conf
-		sed -e "s/ttyS0/$SERIALCON/g" -i $CACHEDIR/sdcard/etc/init/$SERIALCON.conf
+		cat <<-EOF > $CACHEDIR/sdcard/etc/init/$SERIALCON.conf
+		start on stopped rc RUNLEVEL=[2345]
+		stop on runlevel [!2345]
+
+		respawn
+		exec /sbin/getty --noclear 115200 $SERIALCON
+		EOF
 
 		# don't clear screen tty1
 		sed -e s,"exec /sbin/getty","exec /sbin/getty --noclear",g -i $CACHEDIR/sdcard/etc/init/tty1.conf
@@ -205,9 +208,6 @@ install_distribution_specific()
 
 		# enable root login for latest ssh on trusty
 		sed -i 's/PermitRootLogin without-password/PermitRootLogin yes/' $CACHEDIR/sdcard/etc/ssh/sshd_config
-
-		# fix selinux error
-		mkdir $CACHEDIR/sdcard/selinux
 
 		# remove legal info from Ubuntu
 		[[ -f $CACHEDIR/sdcard/etc/legal ]] && rm $CACHEDIR/sdcard/etc/legal
@@ -226,9 +226,6 @@ install_distribution_specific()
 	xenial)
 		# enable root login for latest ssh on jessie
 		sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' $CACHEDIR/sdcard/etc/ssh/sshd_config
-
-		# fix selinux error
-		mkdir $CACHEDIR/sdcard/selinux
 
 		# remove legal info from Ubuntu
 		[[ -f $CACHEDIR/sdcard/etc/legal ]] && rm $CACHEDIR/sdcard/etc/legal
